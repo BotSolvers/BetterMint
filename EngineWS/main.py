@@ -24,13 +24,33 @@ def enqueue_output(out, queue):
 
 class EngineChess:
     def __init__(self, path_engine):
-        self._engine = subprocess.Popen(
-            path_engine,
-            universal_newlines=True,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-        )
+        print(f"Attempting to start engine: {path_engine}")
+        if not os.path.exists(path_engine):
+            show_message(f"ERROR: Engine path does not exist:\n{path_engine}")
+            raise FileNotFoundError(f"Engine not found at {path_engine}")
+        
+        try:
+            self._engine = subprocess.Popen(
+                [path_engine],
+                universal_newlines=True,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
+        except OSError as e:
+            print(f"FATAL ERROR starting engine: {path_engine}")
+            print(f"DETAILS: {e}")
+            if hasattr(e, 'winerror') and e.winerror == 193:
+                show_message(
+                    "The selected file is not a valid Windows application.\\n"
+                    "This can happen if:\\n"
+                    "  - The file is for a different OS (e.g., Linux).\\n"
+                    "  - The file requires a CPU feature you don't have (like AVX2).\\n"
+                    "  - The file is corrupt or not a real engine.\\n\\n"
+                    "Please restart and try selecting a different engine, like 'opental_x64plain.exe'."
+                )
+            raise e
+
         self.queueOutput = Queue()
         self.thread = Thread(target=enqueue_output, args=(self._engine.stdout, self.queueOutput))
         self.thread.daemon = True
@@ -78,7 +98,11 @@ root = tk.Tk()
 root.withdraw()
 
 show_message("Please select engine executable files.")
-engine_exe_paths = filedialog.askopenfilenames(title="Select engine executable files")
+initial_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'engines & books')
+engine_exe_paths = filedialog.askopenfilenames(
+    title="Select engine executable files",
+    initialdir=initial_dir
+)
 
 if not engine_exe_paths:
     print("No engine selected. Exiting.")

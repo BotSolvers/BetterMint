@@ -85,6 +85,30 @@ let inputObjects = {
   "option-evaluation-bar": {
     default_value: true,
   },
+  "option-auto-queue": {
+    default_value: false,
+  },
+  "option-panic-mode": {
+    default_value: false,
+  },
+  "option-panic-time": {
+    default_value: 10,
+  },
+  "option-notifications": {
+    default_value: true,
+  },
+  "option-fast-opening-moves": {
+    default_value: false,
+  },
+  "option-fast-opening-speed": {
+    default_value: 50,
+  },
+  "option-instant-premove": {
+    default_value: false,
+  },
+  "option-instant-premove-key": {
+    default_value: "P",
+  },
 };
 
 let DefaultExtensionOptions = {};

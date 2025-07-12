@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
-    "name": "Mint V2 - Chess",
-    "short_name": "Mint V2 - Chess",
+    "name": "Mint V2.0 - Chess",
+    "short_name": "Mint V2.0 - Chess",
     "icons": {
         "16": "img/logo-16.png",
         "48": "img/logo-48.png",

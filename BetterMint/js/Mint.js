@@ -126,7 +126,45 @@ var enumOptions = {
   MoveAnalysis: "option-move-analysis",
   DepthBar: "option-depth-bar",
   EvaluationBar: "option-evaluation-bar",
+  AutoQueue: "option-auto-queue",
+  PanicMode: "option-panic-mode",
+  PanicTime: "option-panic-time",
+  Notifications: "option-notifications",
+  FastOpeningMoves: "option-fast-opening-moves",
+  FastOpeningSpeed: "option-fast-opening-speed",
+  InstantPremove: "option-instant-premove",
+  InstantPremoveKey: "option-instant-premove-key",
 };
+
+// helper to parse remaining time for current player
+function getRemainingPlayerTimeSeconds() {
+  const selectors = [
+    '.clock-component.clock-bottom',
+    '.clock-button-component.clock-bottom',
+    '.clock.clock-bottom',
+    '.clock-bottom',
+  ];
+  for (const sel of selectors) {
+    const el = document.querySelector(sel);
+    if (el && el.textContent) {
+      const text = el.textContent.trim();
+      // Extract time like 1:23, 10:15, 0:05, 1:02:15
+      const match = text.match(/\d{1,2}(:\d{2}){1,2}/);
+      if (!match) continue;
+      const parts = match[0].split(':').map(Number);
+      let seconds = 0;
+      if (parts.length === 3) {
+        seconds = parts[0] * 3600 + parts[1] * 60 + parts[2];
+      } else if (parts.length === 2) {
+        seconds = parts[0] * 60 + parts[1];
+      } else if (parts.length === 1) {
+        seconds = parts[0];
+      }
+      return seconds;
+    }
+  }
+  return null;
+}
 
 var BetterMintmaster;
 var Config = undefined;
@@ -179,7 +217,7 @@ class GameController {
           console.log("WHITE'S FIRST MOVE - INITIATING PRE-MOVES");
         }
       }
-      
+
       this.UpdateEngine(false);
     });
     // check if a new game has started
@@ -193,6 +231,8 @@ class GameController {
         BetterMintmaster.engine.moveCounter = 0;
         BetterMintmaster.engine.hasShownLimitMessage = false;
         BetterMintmaster.engine.isPreMoveSequence = true;
+      } else if (event.data === "gameOver") {
+        this.handleGameOver();
       }
     });
     let checkEventOne = false;
@@ -221,7 +261,62 @@ class GameController {
           this.evalBar.classList.add("evaluation-bar-flipped");
         else this.evalBar.classList.remove("evaluation-bar-flipped");
       }
+      // handle auto queue toggle dynamically
+      this.setupAutoQueueObserver();
     });
+
+    // Setup auto-queue observer initially if enabled
+    this.setupAutoQueueObserver();
+  }
+
+  // Observe DOM for the "New" game button and click it when Auto Queue is enabled
+  setupAutoQueueObserver() {
+    if (this.autoQueueObserver) {
+      // If observer exists but AutoQueue is disabled, disconnect it.
+      if (!getValueConfig(enumOptions.AutoQueue)) {
+        this.autoQueueObserver.disconnect();
+        this.autoQueueObserver = null;
+      }
+      return;
+    }
+
+    if (!getValueConfig(enumOptions.AutoQueue)) return;
+
+    this.autoQueueObserver = new MutationObserver(() => {
+      const buttons = document.querySelectorAll('button.game-over-buttons-button');
+      for (const btn of buttons) {
+        const span = btn.querySelector('span');
+        if (span && span.textContent.trim().startsWith('New')) {
+          btn.click();
+          break;
+        }
+      }
+    });
+
+    this.autoQueueObserver.observe(document.body, { childList: true, subtree: true });
+  }
+
+  handleGameOver() {
+    if (getValueConfig(enumOptions.AutoQueue)) {
+      const maxAttempts = 60; // Poll for 30 seconds
+      let attempts = 0;
+      const intervalId = setInterval(() => {
+        attempts++;
+        if (attempts > maxAttempts) {
+          clearInterval(intervalId);
+          return;
+        }
+
+        const buttons = document.querySelectorAll('.game-over-buttons-button');
+        for (const button of buttons) {
+          if (button.textContent && button.textContent.trim().startsWith('New')) {
+            button.click();
+            clearInterval(intervalId);
+            return;
+          }
+        }
+      }, 500);
+    }
   }
   UpdateExtensionOptions() {
     if (getValueConfig(enumOptions.EvaluationBar) && this.evalBar == null)
@@ -233,12 +328,8 @@ class GameController {
       this.evalBar.remove();
       this.evalBar = null;
     }
-    if (getValueConfig(enumOptions.DepthBar) && this.depthBar == null)
-      this.CreateAnalysisTools();
-    else if (!getValueConfig(enumOptions.DepthBar) && this.depthBar != null) {
-      this.depthBar.parentElement.remove();
-      this.depthBar = null;
-    }
+    // Start or stop auto queue observer based on updated option
+    this.setupAutoQueueObserver();
     if (!getValueConfig(enumOptions.ShowHints)) {
       this.RemoveCurrentMarkings();
     }
@@ -467,6 +558,75 @@ class GameController {
   }
 }
 
+function getPieceFromFen(fen, square) {
+    const fenBoard = fen.split(' ')[0];
+    const ranks = fenBoard.split('/');
+
+    const file = square.charCodeAt(0) - 'a'.charCodeAt(0);
+    const rank = 8 - parseInt(square.charAt(1), 10);
+
+    if (rank < 0 || rank > 7 || file < 0 || file > 7) {
+        return null; // Invalid square
+    }
+
+    const rankStr = ranks[rank];
+    let fileIdx = 0;
+    for (let i = 0; i < rankStr.length; i++) {
+        const char = rankStr.charAt(i);
+        if (/\d/.test(char)) { // it's a number for empty squares
+            fileIdx += parseInt(char, 10);
+        } else {
+            if (fileIdx === file) {
+                return char;
+            }
+            fileIdx++;
+        }
+    }
+    return null; // Should be an empty square
+}
+
+function getVerboseMove(move, fen) {
+    const piece = getPieceFromFen(fen, move.from);
+    // if (!piece) return move.move; // fallback - let's be optimistic
+
+    const pieceNames = {
+        'p': 'pawn', 'n': 'knight', 'b': 'bishop', 'r': 'rook', 'q': 'queen', 'k': 'king'
+    };
+
+    const pieceName = pieceNames[piece.toLowerCase()];
+
+    let verboseMove = `${pieceName} to ${move.to}`;
+
+    const capturedPiece = getPieceFromFen(fen, move.to);
+    if (capturedPiece) {
+        const capturedPieceName = pieceNames[capturedPiece.toLowerCase()];
+        verboseMove = `${pieceName} takes ${capturedPieceName} on ${move.to}`;
+    }
+
+    // basic castling detection
+    if (piece.toLowerCase() === 'k') {
+        const fromFile = move.from.charCodeAt(0);
+        const toFile = move.to.charCodeAt(0);
+        if (Math.abs(fromFile - toFile) > 1) {
+            if (toFile > fromFile) return "castles kingside";
+            else return "castles queenside";
+        }
+    }
+
+    // en passant detection
+    if (piece.toLowerCase() === 'p' && !capturedPiece && move.from.charAt(0) !== move.to.charAt(0)) {
+         verboseMove = `pawn takes on ${move.to}`;
+    }
+
+    if (move.promotion) {
+        const promotionPieceName = pieceNames[move.promotion.toLowerCase()];
+        verboseMove += ` promoting to a ${promotionPieceName}`;
+    }
+
+    return verboseMove;
+}
+
+
 class StockfishEngine {
   constructor(BetterMintmaster) {
     let stockfishJsURL;
@@ -582,11 +742,22 @@ class StockfishEngine {
   go() {
     this.onReady(() => {
       this.stopEvaluation(() => {
-        // Prevent overlapping evaluations
         if (this.isEvaluating) return;
-        console.assert(!this.isEvaluating, "Duplicated Stockfish go command");
         this.isEvaluating = true;
-        this.send(`go depth ${this.depth}`);
+
+        // Panic mode logic
+        let cmd = null;
+        if (getValueConfig(enumOptions.PanicMode) && getValueConfig(enumOptions.LegitAutoMove)) {
+          const remaining = getRemainingPlayerTimeSeconds();
+          const threshold = parseInt(getValueConfig(enumOptions.PanicTime));
+          if (remaining !== null && remaining <= threshold) {
+            cmd = `go depth 1`;
+          }
+        }
+        if (!cmd) {
+          cmd = `go depth ${this.depth}`;
+        }
+        this.send(cmd);
       });
     });
   }
@@ -643,7 +814,7 @@ class StockfishEngine {
       callback();
     }
   }
-  
+
   onStockfishResponse() {
     if (this.isRequestedStop) {
       this.isRequestedStop = false;
@@ -704,7 +875,7 @@ class StockfishEngine {
   ProcessMessage(event) {
     this.ready = false;
     let line = event && typeof event === "object" ? event.data : event;
-  
+
     if (line === "uciok") {
       this.loaded = true;
       this.BetterMintmaster.onEngineLoaded();
@@ -735,7 +906,7 @@ class StockfishEngine {
       let pvMatch = line.match(/^info .*?pv ([a-h][1-8][a-h][1-8][qrbn]?(?: [a-h][1-8][a-h][1-8][qrbn]?)*)(?: .*)?/);
       let multipvMatch = line.match(/^info .*?multipv (\d+)/);
       let bestMoveMatch = line.match(/^bestmove ([a-h][1-8][a-h][1-8][qrbn]?)(?: ponder ([a-h][1-8][a-h][1-8][qrbn]?))?/);
-  
+
       if (depthMatch && scoreMatch && pvMatch) {
         let depth = parseInt(depthMatch[1]);
         let seldepth = seldepthMatch ? parseInt(seldepthMatch[1]) : null;
@@ -744,10 +915,10 @@ class StockfishEngine {
         let score = parseInt(scoreMatch[2]);
         let multipv = multipvMatch ? parseInt(multipvMatch[1]) : 1;
         let pv = pvMatch[1];
-  
+
         let cpScore = scoreType === "cp" ? score : null;
         let mateScore = scoreType === "mate" ? score : null;
-  
+
         if (!this.isRequestedStop) {
           let move = new TopMove(pv, depth, cpScore, mateScore, multipv);
           this.onTopMoves(move, false);
@@ -765,7 +936,7 @@ class StockfishEngine {
           const bestMove = bestMoveMatch[1];
           const ponderMove = bestMoveMatch[2];
           const index = this.topMoves.findIndex((object) => object.move === bestMove);
-  
+
           if (index < 0) {
             console.warn(`The engine returned the best move "${bestMove}" but it's not in the top move list.`);
             let bestMoveOnTop = new TopMove(
@@ -782,7 +953,7 @@ class StockfishEngine {
         this.isRequestedStop = false;
       }
     }
-  }  
+  }
 
   executeReadyCallbacks() {
     while (this.readyCallbacks.length > 0) {
@@ -930,18 +1101,31 @@ class StockfishEngine {
             }
         }
     }
-    if (bestMoveSelected && this.topMoves.length > 0) {
+    if (this.BetterMintmaster && this.BetterMintmaster.instantPremoveActive && bestMoveSelected) {
+      const bestMove = this.topMoves[0];
+      const legalMoves = this.BetterMintmaster.game.controller.getLegalMoves();
+      const moveData = legalMoves.find(m=>m.from===bestMove.from && m.to===bestMove.to);
+      if (moveData) {
+        moveData.userGenerated=true;
+        if(bestMove.promotion) moveData.promotion=bestMove.promotion;
+        this.BetterMintmaster.instantPremoveActive=false;
+        this.BetterMintmaster.game.controller.move(moveData);
+        return;
+      }
+    }
+
+    if (bestMoveSelected) {
       const bestMove = this.topMoves[0];
       const currentFEN = this.BetterMintmaster.game.controller.getFEN();
       const currentTurn = currentFEN.split(" ")[1]; // 'w' or 'b'
       const playingAs = this.BetterMintmaster.game.controller.getPlayingAs();
-    
+
       if (getValueConfig(enumOptions.Premove) && getValueConfig(enumOptions.LegitAutoMove)) {
         // [FIX] Execute pre-moves if:
         // - It's player's turn AND
         // - Haven't reached move limit
         if (
-          ((playingAs === 1 && currentTurn === 'w') || 
+          ((playingAs === 1 && currentTurn === 'w') ||
            (playingAs === 2 && currentTurn === 'b')) &&
           this.moveCounter < getValueConfig(enumOptions.MaxPreMoves) && // Use move counter instead of premove depth
           !this.hasShownLimitMessage
@@ -950,16 +1134,16 @@ class StockfishEngine {
           const moveData = legalMoves.find(
             move => move.from === bestMove.from && move.to === bestMove.to
           );
-    
+
           if (moveData) {
             moveData.userGenerated = true;
-    
+
             if (bestMove.promotion !== null) {
               moveData.promotion = bestMove.promotion;
             }
-    
+
             this.moveCounter++; // Increment move counter
-    
+
             // Calculate pre-move execution time
             let pre_move_time =
               getValueConfig(enumOptions.PreMoveTime) +
@@ -968,11 +1152,11 @@ class StockfishEngine {
               ) %
                 getValueConfig(enumOptions.PreMoveTimeRandomDiv)) *
                 getValueConfig(enumOptions.PreMoveTimeRandomMulti);
-    
+
             setTimeout(() => {
               this.BetterMintmaster.game.controller.move(moveData);
-    
-              if (window.toaster) {
+
+              if (getValueConfig(enumOptions.Notifications) && window.toaster) {
                 window.toaster.add({
                   id: "auto-move-counter",
                   duration: 2000,
@@ -987,9 +1171,9 @@ class StockfishEngine {
                   }
                 });
               }
-    
+
               if (this.moveCounter >= getValueConfig(enumOptions.MaxPreMoves)) {
-                if (window.toaster) {
+                if (getValueConfig(enumOptions.Notifications) && window.toaster) {
                   window.toaster.add({
                     id: "auto-move-limit",
                     duration: 2000, // Reduced from 3000
@@ -1009,22 +1193,22 @@ class StockfishEngine {
             }, pre_move_time); // Execute with calculated delay
           }
         }
-    
+
         // Check for mate in 3 or less - MOVED INSIDE THE PREMOVE CHECK
         if (bestMove.mate !== null && bestMove.mate > 0 && bestMove.mate <= getValueConfig(enumOptions.MateFinderValue)) {
           const legalMoves = this.BetterMintmaster.game.controller.getLegalMoves();
           const moveData = legalMoves.find(
             move => move.from === bestMove.from && move.to === bestMove.to
           );
-    
+
           if (moveData) {
             moveData.userGenerated = true;
-    
+
             if (bestMove.promotion !== null) {
               moveData.promotion = bestMove.promotion;
             }
-    
-            if (window.toaster) {
+
+            if (getValueConfig(enumOptions.Notifications) && window.toaster) {
               window.toaster.add({
                 id: "premove-mate",
                 duration: 2000,
@@ -1040,16 +1224,18 @@ class StockfishEngine {
                 },
               });
             }
-    
+
             this.BetterMintmaster.game.controller.move(moveData);
           }
         }
       }
     }
-    
+
     if (getValueConfig(enumOptions.TextToSpeech)) {
       const topMove = this.topMoves[0]; // Select the top move from the PV list
-      const msg = new SpeechSynthesisUtterance(topMove.move); // Use topMove.move for the spoken text
+      const currentFEN = this.BetterMintmaster.game.controller.getFEN();
+      const verboseMove = getVerboseMove(topMove, currentFEN);
+      const msg = new SpeechSynthesisUtterance(verboseMove); // Use topMove.move for the spoken text
       const voices = window.speechSynthesis.getVoices();
       const femaleVoices = voices.filter((voice) =>
         voice.voiceURI.includes("Google UK English Female")
@@ -1208,13 +1394,43 @@ class StockfishEngine {
           top_pv_moves = [fastestMateMove];
         }
       }
-      let auto_move_time =
-        getValueConfig(enumOptions.AutoMoveTime) +
-        (Math.floor(
-          Math.random() * getValueConfig(enumOptions.AutoMoveTimeRandom)
-        ) %
-          getValueConfig(enumOptions.AutoMoveTimeRandomDiv)) *
-          getValueConfig(enumOptions.AutoMoveTimeRandomMulti);
+      let panicActive = false;
+      if (getValueConfig(enumOptions.PanicMode) && getValueConfig(enumOptions.LegitAutoMove)) {
+        const remaining = getRemainingPlayerTimeSeconds();
+        const threshold = parseInt(getValueConfig(enumOptions.PanicTime));
+        if (remaining !== null && remaining <= threshold) panicActive = true;
+      }
+
+      let auto_move_time;
+      if (panicActive) {
+        auto_move_time = Math.floor(Math.random() * 600); // 0-599 ms
+      } else {
+        auto_move_time =
+          getValueConfig(enumOptions.AutoMoveTime) +
+          (Math.floor(
+            Math.random() * getValueConfig(enumOptions.AutoMoveTimeRandom)
+          ) %
+            getValueConfig(enumOptions.AutoMoveTimeRandomDiv)) *
+            getValueConfig(enumOptions.AutoMoveTimeRandomMulti);
+      }
+
+      if (this.BetterMintmaster && this.BetterMintmaster.instantPremoveActive) {
+        auto_move_time = 0;
+        this.BetterMintmaster.instantPremoveActive = false;
+      }
+
+      if (getValueConfig(enumOptions.FastOpeningMoves)) {
+        const fenParts = this.BetterMintmaster.game.controller.getFEN().split(" ");
+        const fullMoveNumber = parseInt(fenParts[5], 10) || 1;
+        if (fullMoveNumber <= 7) {
+          const speedPercentage = parseInt(getValueConfig(enumOptions.FastOpeningSpeed), 10);
+          const speedMultiplier = 1 + (speedPercentage * 2) / 100;
+          if (speedMultiplier > 0) {
+            auto_move_time /= speedMultiplier;
+          }
+        }
+      }
+
       if (
         isNaN(auto_move_time) ||
         auto_move_time === null ||
@@ -1223,7 +1439,7 @@ class StockfishEngine {
         auto_move_time = 100;
       }
       const secondsTillAutoMove = (auto_move_time / 1000).toFixed(1);
-      if (window.toaster) {
+      if (getValueConfig(enumOptions.Notifications) && window.toaster) {
         window.toaster.add({
           id: "chess.com",
           duration: (parseFloat(secondsTillAutoMove) + 1) * 1000,
@@ -1293,6 +1509,7 @@ class BetterMint {
         // show a notification when the settings is updated, but only if the previous
         // notification has gone
         if (
+          getValueConfig(enumOptions.Notifications) &&
           window.toaster &&
           window.toaster.notifications.findIndex(
             (noti) => noti.id == "BetterMint-settings-updated"
@@ -1308,14 +1525,31 @@ class BetterMint {
       },
       false
     );
+    this.instantPremoveActive = false;
+    document.addEventListener('keydown', (e) => {
+      if (!getValueConfig(enumOptions.InstantPremove)) return;
+      const cfgKey = (getValueConfig(enumOptions.InstantPremoveKey) || 'P').toLowerCase();
+      if (e.key.toLowerCase() === cfgKey) {
+        this.instantPremoveActive = true;
+        if (getValueConfig(enumOptions.Notifications) && window.toaster) {
+          window.toaster.add({
+            id: 'instant-premove-armed',
+            duration: 1500,
+            icon: 'circle-lightning',
+            content: `Instant Premove armed (key '${cfgKey.toUpperCase()}') for next move!`,
+            style: {position:'fixed',bottom:'120px',right:'30px',backgroundColor:'#5d3fd3',color:'white'}
+          });
+        }
+      }
+    });
   }
   onEngineLoaded() {
-    if (window.toaster) {
+    if (getValueConfig(enumOptions.Notifications) && window.toaster) {
       window.toaster.add({
         id: "chess.com",
         duration: 3000,
         icon: "circle-info",
-        content: `BetterMint V2 is enabled!`,
+        content: `Mint V2.0 is enabled!`,
       });
     }
   }
