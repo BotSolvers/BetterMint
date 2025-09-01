@@ -91,6 +91,7 @@
   - <a href="https://github.com/ProtonDev-sys">ProtonDev</a> - API Docs & Public API Host<br>
     - <a href="https://github.com/gmcheems">GMCheems</a> - Made GMCheems
   - <a href="https://github.com/lucaskvasirr">lucaskvasirr</a> - Premove Code Snippet
+ - <a href="https://github.com/Looka708">lucaskvasirr</a> - Improvements
 </p>
 
 <p align="center">Remember, BetterMint V2 is a tool to enhance your learning and enjoyment of chess. Embrace the journey to mastery through practice and dedication!</p>
